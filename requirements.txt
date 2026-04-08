@@ -1,0 +1,46 @@
+# ============================================================
+# MARL Drone Swarm Pretraining — Dependencies
+# Python 3.10–3.12 required (3.12 recommended on Windows)
+# ============================================================
+
+# --- Core ML ---
+# Install PyTorch with CUDA FIRST via https://pytorch.org/get-started/locally/
+# Example (CUDA 12.1):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Example (CUDA 11.8):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+torch>=2.1.0
+numpy>=1.24.0
+
+# --- RL / Environment ---
+gymnasium>=1.0.0
+pettingzoo>=1.24.0
+
+# --- Drone Simulator ---
+# gym-pybullet-drones has no Windows wheels on PyPI — install from source:
+#   pip install "git+https://github.com/utiasDSL/gym-pybullet-drones.git"
+# (handled automatically by scripts/install_deps.sh)
+
+# --- MARL Framework ---
+# EPyMARL — install from source (not on PyPI):
+#   pip install git+https://github.com/uoe-agents/epymarl.git
+# or clone and install:
+#   git clone https://github.com/uoe-agents/epymarl.git && pip install -e ./epymarl
+
+# --- Config & Logging ---
+pyyaml>=6.0
+tensorboard>=2.14.0
+tqdm>=4.65.0
+
+# --- Visualization ---
+matplotlib>=3.7.0
+opencv-python>=4.8.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+
+# --- Testing ---
+pytest>=7.4.0
+
+# --- Phase 5 only (GNN) — install separately when needed ---
+# pip install torch-geometric
+# pip install pyg-lib torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-{VERSION}+cu{CUDA}.html

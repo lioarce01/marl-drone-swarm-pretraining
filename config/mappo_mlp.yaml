@@ -1,0 +1,96 @@
+# ============================================================
+# mappo_mlp.yaml — MAPPO + MLP baseline
+# Hyperparameters aligned with official MAPPO paper defaults
+# (Yu et al. NeurIPS 2022 + marlbenchmark/on-policy repo)
+# ============================================================
+
+_base: base.yaml
+
+env:
+  n_agents: 3
+  grid_size: 10
+  max_steps: 2000
+  seed: 42
+
+algorithm: MAPPO
+
+network:
+  type: MLP
+  actor_hidden: [128, 128]
+  critic_hidden: [256, 256]
+  use_layer_norm: true
+  share_parameters: true
+
+hyperparameters:
+  lr_actor: 5.0e-4          # official MAPPO default (marlbenchmark/on-policy)
+  lr_critic: 5.0e-4         # same; separate optimizer so 1:1 ratio is correct
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coef: 0.005       # start value — decays linearly to entropy_coef_end
+  entropy_coef_end: 0.003   # floor value — raised from 0.002, still insufficient to prevent late decay
+  entropy_decay_steps: 2_000_000  # reach floor by 2M steps, then hold flat
+  n_steps: 2048
+  n_minibatches: 1          # official MAPPO: NO mini-batch splitting in MARL
+  n_epochs: 10
+  max_grad_norm: 10.0
+  value_loss_coef: 1.0      # correct for separate actor/critic optimizers
+
+curriculum:
+  enabled: true
+  start_stage: 1
+  stages:
+    - stage: 1
+      grid_size: 10
+      n_obstacles: 0
+      n_agents: 3
+      advance_threshold: 0.52
+      advance_min_episodes: 20
+    - stage: 2
+      grid_size: 10
+      n_obstacles: 3
+      n_agents: 3
+      advance_threshold: 0.50
+      advance_min_episodes: 20
+    - stage: 3
+      grid_size: 15
+      n_obstacles: 5
+      n_agents: 3
+      advance_threshold: 0.38
+      advance_min_episodes: 20
+    - stage: 4
+      grid_size: 15
+      n_obstacles: 5
+      n_agents: 6
+      advance_threshold: 0.40
+      advance_min_episodes: 20
+    - stage: 5
+      grid_size: 20
+      n_obstacles: 8
+      n_agents: 6
+      advance_threshold: null   # final stage
+
+reward:
+  w_cov: 3.0       # dominant positive signal for new cell discovery
+  w_prox: 0.0      # removed — nearest_uncovered_direction in obs handles navigation
+  w_col: 15.0      # collision strongly penalized (>> step cost)
+  w_jerk: 0.001    # minimal smoothness penalty
+  w_step: 0.01     # step cost: penalizes idle/revisiting behavior
+  w_done: 10.0     # strong terminal bonus for full coverage
+
+domain_randomization:
+  enabled: false                          # set true in Phase 4
+  drone_mass_range: [0.9, 1.1]           # ±10% mass variation
+  motor_noise_std_range: [0.0, 0.02]     # gaussian noise on velocity commands
+  gps_noise_std_range: [0.0, 0.1]        # position observation noise (metres)
+  wind_force_range: [-0.05, 0.05]        # constant wind per axis (N)
+  obstacle_jitter_range: [0.0, 0.5]      # obstacle position offset (metres) — requires obstacle impl
+  start_pos_noise_range: [0.5, 1.0]      # start position randomization (metres)
+
+training:
+  total_timesteps: 10_000_000
+  checkpoint_every: 100_000
+  eval_every: 50_000
+  eval_episodes: 20
+  log_dir: logs/mappo_mlp_v11
+  device: cuda

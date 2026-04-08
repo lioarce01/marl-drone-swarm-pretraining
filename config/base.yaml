@@ -1,0 +1,64 @@
+# ============================================================
+# base.yaml — Shared defaults inherited by all configs
+# Override any value in the specific config file.
+# ============================================================
+
+env:
+  name: SwarmCoverageEnv
+  n_agents: 3
+  grid_size: 10          # NxN cells, each 1m²
+  cell_size: 1.0         # metres per cell
+  sensor_radius: 1.5     # metres — cell marked visited when drone within this radius
+  arena_height: 3.0      # metres — cruise altitude
+  max_steps: 2000        # steps per episode (RL steps at 24 Hz)
+  physics_steps: 10      # PyBullet sub-steps per RL step (dt = 1/240s each)
+  seed: 42
+
+reward:
+  w_cov: 0.5             # weight for delta coverage (team reward)
+  w_prox: 0.1            # weight for proximity-to-uncovered bonus
+  w_col: 5.0             # penalty per collision event
+  w_jerk: 0.01           # penalty for action smoothness (anti-jerk)
+  w_done: 2.0            # terminal bonus when coverage >= done_threshold
+  done_threshold: 0.90   # fraction of grid that triggers episode success
+
+curriculum:
+  enabled: false         # overridden in mappo_mlp.yaml
+  start_stage: 1
+
+domain_randomization:
+  enabled: false         # overridden in later configs
+  drone_mass_range: [0.9, 1.1]
+  motor_noise_std_range: [0.0, 0.02]
+  gps_noise_std_range: [0.0, 0.1]
+  wind_force_range: [-0.05, 0.05]
+  obstacle_jitter_range: [-0.5, 0.5]
+  start_pos_noise_range: [-1.0, 1.0]
+
+network:
+  type: MLP
+  actor_hidden: [128, 128]
+  critic_hidden: [256, 256]
+  use_layer_norm: true
+  share_parameters: true   # shared weights across agents
+
+hyperparameters:
+  lr_actor: 3.0e-4
+  lr_critic: 1.0e-3
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coef: 0.01
+  n_steps: 2048
+  n_minibatches: 8
+  n_epochs: 10
+  max_grad_norm: 10.0
+  value_loss_coef: 0.5
+
+training:
+  total_timesteps: 5_000_000
+  checkpoint_every: 100_000
+  eval_every: 50_000
+  eval_episodes: 20
+  log_dir: logs/run
+  device: cuda            # "cuda" or "cpu"

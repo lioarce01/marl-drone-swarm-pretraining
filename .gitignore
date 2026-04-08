@@ -1,0 +1,58 @@
+# ============================================================
+#  MARL Drone Swarm — .gitignore
+# ============================================================
+
+# --- Virtual environment ---
+.venv/
+venv/
+env/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Training artifacts ---
+logs/
+!logs/.gitkeep
+
+# --- Model checkpoints ---
+*.pt
+*.pth
+*.ckpt
+
+# --- Evaluation outputs ---
+eval_report.json
+viz/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- PyBullet / simulation ---
+*.bullet
+*.urdf.bak
+
+# --- Misc ---
+.env
+*.log
+*.tmp
+
+right-order.md

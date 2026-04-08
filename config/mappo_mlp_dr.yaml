@@ -1,0 +1,24 @@
+# ============================================================
+# mappo_mlp_dr.yaml — Phase 4: MAPPO + MLP + Domain Randomization
+# Load a checkpoint from mappo_mlp then continue with DR enabled.
+# ============================================================
+
+_base: mappo_mlp.yaml
+
+domain_randomization:
+  enabled: true
+  drone_mass_range: [0.9, 1.1]
+  motor_noise_std_range: [0.0, 0.02]
+  gps_noise_std_range: [0.0, 0.1]
+  wind_force_range: [-0.05, 0.05]
+  obstacle_jitter_range: [-0.5, 0.5]
+  start_pos_noise_range: [-1.0, 1.0]
+
+training:
+  total_timesteps: 5_000_000   # fine-tune on top of Phase 3 checkpoint
+  checkpoint_every: 100_000
+  eval_every: 50_000
+  eval_episodes: 20
+  log_dir: logs/mappo_mlp_dr
+  resume_from: null            # set to checkpoint path, e.g. logs/mappo_mlp/ckpt_latest.pt
+  device: cuda
