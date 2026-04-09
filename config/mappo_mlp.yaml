@@ -28,8 +28,8 @@ hyperparameters:
   gae_lambda: 0.95
   clip_epsilon: 0.2
   entropy_coef: 0.005       # start value — decays linearly to entropy_coef_end
-  entropy_coef_end: 0.003   # floor value — raised from 0.002, still insufficient to prevent late decay
-  entropy_decay_steps: 2_000_000  # reach floor by 2M steps, then hold flat
+  entropy_coef_end: 0.003   # floor — kept above 0.002 (too low) per TESTED.md
+  entropy_decay_steps: 2_000_000
   n_steps: 2048
   n_minibatches: 1          # official MAPPO: NO mini-batch splitting in MARL
   n_epochs: 10
@@ -44,7 +44,7 @@ curriculum:
       grid_size: 10
       n_obstacles: 0
       n_agents: 3
-      advance_threshold: 0.52
+      advance_threshold: 0.45
       advance_min_episodes: 20
     - stage: 2
       grid_size: 10
@@ -92,5 +92,5 @@ training:
   checkpoint_every: 100_000
   eval_every: 50_000
   eval_episodes: 20
-  log_dir: logs/mappo_mlp_v11
+  log_dir: logs/mappo_mlp_v15
   device: cuda

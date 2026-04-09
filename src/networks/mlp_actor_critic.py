@@ -61,7 +61,7 @@ class MLPActor(nn.Module):
             action_log_std: (batch, action_dim) — clamped to [-5, 2]
         """
         mean = torch.tanh(self.net(obs))
-        log_std = self.log_std.clamp(-2.0, 0.5).expand_as(mean)  # std in [0.135, 1.65] — prevents both collapse and explosion
+        log_std = self.log_std.clamp(-2.0, -0.2).expand_as(mean)  # std in [0.135, 0.82] — tighter upper bound prevents log_std hitting ceiling
         return mean, log_std
 
     def get_action(self, obs: torch.Tensor, deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:

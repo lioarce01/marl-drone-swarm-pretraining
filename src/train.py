@@ -13,6 +13,7 @@ Architecture: Centralized Training, Decentralized Execution (CTDE)
 
 import sys
 import os
+import math
 # Add project root to path so 'src' is importable regardless of how this is invoked
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -206,8 +207,7 @@ class MAPPOTrainer:
         self.ret_rms.update(returns_np)
         buffer.returns = (buffer.returns - self.ret_rms.mean) / self.ret_rms.std
 
-        # Entropy coefficient schedule: linear decay from entropy_coef → entropy_coef_end
-        # over entropy_decay_steps, then held flat. Reaches floor much faster than total_steps.
+        # Entropy coefficient: linear decay from entropy_coef → entropy_coef_end over decay_steps
         entropy_coef_end = self.hyp.get("entropy_coef_end", self.entropy_coef)
         decay_steps = self.hyp.get("entropy_decay_steps", total_steps)
         t = min(float(global_step) / float(decay_steps), 1.0)
@@ -248,7 +248,6 @@ class MAPPOTrainer:
 
                 # Entropy bonus
                 entropy_loss = -entropy.mean()
-
                 loss = actor_loss + self.vf_coef * value_loss + current_entropy_coef * entropy_loss
 
                 self.optimizer.zero_grad()
@@ -322,12 +321,44 @@ def train(config: dict, resume_from: str = None) -> None:
     episode = 0
     if resume_from:
         ckpt = torch.load(resume_from, map_location=device)
+
+        # Infer dims from checkpoint weights — critic input = state_dim, actor input = obs_dim
+        ckpt_state_dim = ckpt["model_state"]["critic.net.0.weight"].shape[1]
+        ckpt_obs_dim   = ckpt["model_state"]["actor.net.0.weight"].shape[1]
+        ckpt_n_agents  = env.n_agents  # n_agents doesn't change network shape (shared actor)
+
+        if ckpt_state_dim != state_dim or ckpt_obs_dim != obs_dim:
+            print(f"  Checkpoint dims differ from env init: "
+                  f"state {state_dim}→{ckpt_state_dim}, obs {obs_dim}→{ckpt_obs_dim}. Rebuilding model.")
+            state_dim = ckpt_state_dim
+            obs_dim   = ckpt_obs_dim
+            trainer.build_model(obs_dim, state_dim, action_dim)
+            # buffer rebuilt after stage restore below (n_agents may also change)
+
         trainer.model.load_state_dict(ckpt["model_state"])
         trainer.optimizer.load_state_dict(ckpt["optimizer_state"])
-        global_step = ckpt.get("global_step", 0)
+        global_step   = ckpt.get("global_step", 0)
         best_coverage = ckpt.get("best_coverage", 0.0)
-        episode = ckpt.get("episode", 0)
-        print(f"Resumed from {resume_from} at step {global_step}")
+        episode       = ckpt.get("episode", 0)
+
+        # Restore curriculum stage so the env matches the checkpoint.
+        # Fall back to inferring from state_dim if key missing (old checkpoints).
+        if "curriculum_stage" in ckpt:
+            saved_stage = ckpt["curriculum_stage"]
+        else:
+            # Advance until env state_dim matches checkpoint state_dim
+            while env.get_state_size() < ckpt_state_dim and env_raw.get_current_stage() < len(env_raw._curriculum_cfg):
+                env_raw.advance_curriculum()
+            saved_stage = env_raw.get_current_stage()
+        while env_raw.get_current_stage() < saved_stage:
+            env_raw.advance_curriculum()
+        env.reset()
+
+        # Sync n_agents and buffer after curriculum stage restore
+        n_agents  = env.n_agents
+        state_dim = env.get_state_size()
+        buffer    = RolloutBuffer(n_steps, n_agents, obs_dim, state_dim, action_dim, device)
+        print(f"Resumed from {resume_from} at step {global_step}, stage {env.get_current_stage()}, n_agents={n_agents}")
 
     # Episode tracking
     ep_rewards: list = []
@@ -488,12 +519,14 @@ def train(config: dict, resume_from: str = None) -> None:
             if mean_cov > best_coverage:
                 best_coverage = mean_cov
                 _save_checkpoint(trainer, config, global_step, episode, best_coverage,
-                                 os.path.join(log_dir, "checkpoints", "ckpt_best.pt"))
+                                 os.path.join(log_dir, "checkpoints", "ckpt_best.pt"),
+                                 curriculum_stage=env.get_current_stage())
 
         # --- Periodic checkpoint ---
         if global_step % ckpt_every < n_steps:
             _save_checkpoint(trainer, config, global_step, episode, best_coverage,
-                             os.path.join(log_dir, "checkpoints", "ckpt_latest.pt"))
+                             os.path.join(log_dir, "checkpoints", "ckpt_latest.pt"),
+                             curriculum_stage=env.get_current_stage())
 
         # --- Console progress ---
         if len(ep_rewards) >= 10:
@@ -513,7 +546,8 @@ def train(config: dict, resume_from: str = None) -> None:
 
     # Final checkpoint
     _save_checkpoint(trainer, config, global_step, episode, best_coverage,
-                     os.path.join(log_dir, "checkpoints", "ckpt_final.pt"))
+                     os.path.join(log_dir, "checkpoints", "ckpt_final.pt"),
+                     curriculum_stage=env.get_current_stage())
     print(f"\nTraining complete. Best coverage: {best_coverage:.3f}")
     print(f"Checkpoints saved to: {log_dir}/checkpoints/")
 
@@ -527,8 +561,8 @@ def evaluate(model, env, n_episodes: int, device: torch.device, n_agents: int) -
     coverages, collisions, lengths, rewards = [], [], [], []
     model.eval()
 
-    for _ in range(n_episodes):
-        env.reset()
+    for ep_idx in range(n_episodes):
+        env.reset(seed=1000 + ep_idx)
         obs_list = env.get_obs()
         ep_reward = 0.0
         ep_col = 0
@@ -562,14 +596,15 @@ def evaluate(model, env, n_episodes: int, device: torch.device, n_agents: int) -
     }
 
 
-def _save_checkpoint(trainer, config, global_step, episode, best_coverage, path):
+def _save_checkpoint(trainer, config, global_step, episode, best_coverage, path, curriculum_stage=1):
     torch.save({
-        "model_state":     trainer.model.state_dict(),
-        "optimizer_state": trainer.optimizer.state_dict(),
-        "config":          config,
-        "global_step":     global_step,
-        "episode":         episode,
-        "best_coverage":   best_coverage,
+        "model_state":      trainer.model.state_dict(),
+        "optimizer_state":  trainer.optimizer.state_dict(),
+        "config":           config,
+        "global_step":      global_step,
+        "episode":          episode,
+        "best_coverage":    best_coverage,
+        "curriculum_stage": curriculum_stage,
     }, path)
 
 

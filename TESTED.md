@@ -13,6 +13,9 @@
 | `entropy_coef 0.005→0.001` over 2M steps | Entropy peaks ~1.8 at 400k then declines to 0.1 by 2.5M — collapses too far | Too aggressive |
 | `entropy_coef 0.005→0.002` over 2M steps | Floor insufficient — entropy decays 1.35→0.85 by 3M; floor too weak to hold exploration | DO NOT USE |
 | `entropy_coef 0.005→0.003` over 2M steps | Entropy stable at ~0.95–1.0 through stage 5; maintained exploration across all curriculum stages | **CURRENT** |
+| `target_entropy` not set (floor-only) | Entropy explodes in late training when coverage reward weakens — floor becomes dominant signal | DO NOT USE |
+| `target_entropy=1.0` + soft penalty flip (v12) | Prevented explosion but entropy still collapsed to 0.1 by 3M — bonus coefficient too weak at floor | DO NOT USE |
+| Lagrange adaptive `log_alpha` → `target_entropy=1.0` (v13) | Auto-tunes alpha via gradient descent; validated in MARL literature; replaces all manual schedules — but failed: wrong sign in v13 caused explosion, sign-fixed v14 hit log_std clamp ceiling instead. Reverted in v15. | DO NOT USE |
 | `n_minibatches=8` | Major deviation from official MAPPO; unstable training | DO NOT USE |
 | `n_minibatches=1` | Official MAPPO default | **CORRECT** |
 | `value_loss_coef=0.5` | Wrong for separate actor/critic optimizers | DO NOT USE |
@@ -40,7 +43,8 @@
 | `log_std` init = `zeros` (std=1.0) | Contributed to entropy explosion | DO NOT USE |
 | `log_std` init = `-1.0` (std≈0.37) | Better starting distribution | **CURRENT** |
 | `log_std.clamp(-5, 2)` | Too wide; entropy still oscillated | DO NOT USE |
-| `log_std.clamp(-2, 0.5)` | Bounds std to [0.135, 1.65]; physically prevents entropy explosion/collapse | **CURRENT** |
+| `log_std.clamp(-2, 0.5)` | Upper bound too permissive — log_std hits ceiling, entropy reaches 7.5 (v13/v14). Actor gradient drives log_std to max regardless of entropy coefficient. | DO NOT USE |
+| `log_std.clamp(-2, -0.2)` | Max std=0.82, max entropy=4.88 — structurally impossible to explode past this. Still sufficient exploration. | **CURRENT** |
 
 ## Entropy Schedule — Lessons Learned
 
@@ -54,6 +58,12 @@ The entropy bonus creates persistent pressure toward higher entropy. As coverage
 - **Entropy near-zero before curriculum advancement**: policy memorizes a fixed trajectory, cannot adapt to new stage conditions. Coverage temporarily drops 30 points on identical environment after stage transition.
 - **Entropy bounce on curriculum transition**: when entropy was ~0.1 and curriculum advanced, entropy spiked back to 1.45 due to new obs patterns (empty coverage map). This is a useful but unreliable recovery mechanism.
 - **Recommended floor: 0.003** — 0.002 is too weak; 0.003 maintains sufficient exploration pressure through late stages.
+- **Entropy still declining on stage 5 with floor 0.003**: at 3.5M steps entropy fell to 0.75 and trending down despite floor. Policy optimization winning over entropy gradient on harder task (20×20, 6 agents).
+- **Entropy explosion in late training (v11, ~5M–9.4M)**: entropy reversed from 0.75 → 3.5+ by 9.4M. Coverage regressed 0.35 → 0.25, collisions reappeared. Root cause: coverage reward per step is very weak on 400-cell grid; constant entropy floor 0.003 becomes the dominant optimization signal and the optimizer maximizes entropy to reduce the loss. Same pattern as v4/v5. Fixed in v12 with soft entropy target (see below).
+- **Soft entropy target (flip-sign approach) insufficient**: below-target bonus at 0.003 coefficient is too weak to counter policy gradient. Entropy still collapsed 1.0→0.1 by 3M in v12 despite soft target. DO NOT rely on this approach.
+- **Fixed entropy floor alone is insufficient**: a constant `entropy_coef_end` floor will always eventually cause explosion when coverage reward weakens. DO NOT use floor-only in long runs.
+- **Lagrange alpha wrong sign (v13)**: `alpha_loss = -(log_alpha * (entropy - target))` has inverted gradient — alpha INCREASES when entropy > target, creating a positive feedback loop. Entropy exploded 2→7.5 by 1M steps. Correct form: `alpha_loss = (log_alpha * (entropy - target))` — positive gradient when entropy > target causes Adam to DECREASE log_alpha → alpha falls → entropy falls.
+- **Fixed: Lagrange adaptive entropy temperature (SAC-style)**: correct sign `alpha_loss = (log_alpha * (entropy - target_entropy).detach())`. Alpha rises automatically when entropy collapses, falls when it explodes. Validated in 2024–2025 MARL literature (Kim et al. ICML 2023, axPPO, DPPO). Add `target_entropy: 1.0` to YAML; remove `entropy_coef_end` and `entropy_decay_steps`. **CURRENT approach (v14)**.
 
 ## Curriculum Learning — Lessons Learned
 
@@ -87,6 +97,10 @@ The entropy bonus creates persistent pressure toward higher entropy. As coverage
 - **DR ranges missing from YAML**: all DR ranges defaulted to `[0.0, 0.0]` — enabling DR would randomize nothing. Ranges now in config under `domain_randomization`.
 - **`apply_motor_noise()` dead code**: method operated on RPMs but env uses `ActionType.VEL`. Noise is applied directly on velocity commands in `step()`. Method removed.
 - **Actor destroyed on grid_size curriculum transition**: when `grid_size` changes (e.g. stage 2→3, 10×10→15×15), `state_dim` changes (163→288), triggering `trainer.build_model()` which rebuilt the ENTIRE model from random weights — wiping the actor. Fix: save `actor.state_dict()` before rebuild, restore after if `obs_dim` is unchanged (`preserve_actor = new_obs_dim == obs_dim`). Only the critic needs rebuilding for grid resize. Do NOT gate on `n_agents` — per-agent obs_dim is the same regardless of swarm size, actor weights are fully reusable when going 3→6 agents.
+- **Resume crashes when checkpoint is from a different curriculum stage**: `load_state_dict()` fails with size mismatch if checkpoint was saved at stage 5 (state_dim=526) but env initializes from YAML at stage 1 (state_dim=163). Fix: infer `state_dim` and `obs_dim` from checkpoint weight shapes before building the model, then rebuild if mismatch detected.
+- **Curriculum stage not saved in checkpoints**: on resume, env always reset to stage 1 regardless of where training stopped — policy was forced to re-learn earlier stages. Fix: save `curriculum_stage` in checkpoint dict; on resume, call `env_raw.advance_curriculum()` in a loop until saved stage is reached. For old checkpoints without the key, infer stage by advancing until `get_state_size()` matches checkpoint `state_dim`.
+- **`n_agents` not synced after curriculum stage restore on resume**: after restoring curriculum stage, the training loop's local `n_agents` variable was still the initial value (3), causing `IndexError` when stepping with 6 agents. Fix: reassign `n_agents = env.n_agents` and rebuild buffer after stage restore.
+- **`coverage_pct_std` always ~zero in eval**: seeding `np.random` before each eval episode does not affect PyBullet's internal drone placement RNG. All episodes use identical start positions → deterministic policy → identical trajectories → std ≈ 1e-17. Do not use `coverage_pct_std` as a policy diversity metric — it is unreliable. Use behavioral inspection (visualize.py) instead to check for trajectory memorization.
 
 ## Observation Space
 
@@ -105,7 +119,7 @@ The entropy bonus creates persistent pressure toward higher entropy. As coverage
 | Mass randomization | Ready (fixed) |
 | Obstacle jitter | Not ready — obstacles not implemented in env |
 
-Enable only after: curriculum stage ≥ 3, eval coverage consistently > 0.55, `coverage_pct_std > 0.05` in eval (policy not memorizing one trajectory).
+Enable only after: curriculum stage ≥ 3, eval coverage consistently > 0.55. Do NOT use `coverage_pct_std` as a readiness signal — it is always ~zero due to PyBullet's fixed internal seed (see Bugs Fixed). Use `visualize.py` to manually verify drones are not memorizing one trajectory.
 
 ## Training Runs Summary
 
@@ -119,4 +133,8 @@ Enable only after: curriculum stage ≥ 3, eval coverage consistently > 0.55, `c
 | v8 | 2M (stopped) | 0.44 plateau | Entropy schedule too slow (→0.0005 over 10M) |
 | v9 | 3M (stopped) | **0.55 train / 0.53 eval** | Stages 1→2→3 in 500k steps; actor destroyed at stage 3 (grid resize bug) |
 | v10 | 3M (stopped) | 0.44 eval stage 3 | entropy floor 0.002 insufficient — entropy decayed to 0.85 by 3M; stage 3 threshold 0.45 never met; actor preservation fix first confirmed working (coverage held at 0.35, not 0.15) |
-| v11 | 2M+ (running) | **0.41 eval stage 5** | Resumed v10 best ckpt; entropy floor raised to 0.003; stage 3 threshold lowered to 0.38; all 5 curriculum stages completed within 400k steps; coverage 0.32–0.35 train / 0.41 eval at 2M on stage 5 (20×20, 6 agents) |
+| v11 | 9.4M (stopped) | **0.41 eval ~4M** | All 5 stages in 400k steps; entropy exploded 0.75→3.5 by 9.4M; coverage regressed to 0.25; no best.pt saved (stage 5 never beat v10's 0.44); only ckpt_latest available |
+| v12 | 3M (stopped) | 0.44 train ~2M | Soft entropy target (flip-sign); prevented explosion but entropy collapsed 1.0→0.1 by 3M; stage 1 threshold 0.52 never met; coverage peaked 0.44 |
+| v13 | 1M (stopped) | 0.52 train ~700k | Lagrange alpha wrong sign → positive feedback → entropy exploded 2→7.5; curriculum reached stage 3 before collapse |
+| v14 | 1M (stopped) | 0.46 train ~500k | Lagrange sign fixed; but actor gradient drove log_std to clamp ceiling (0.5) regardless — entropy still exploded to 7.5. Root cause: clamp too permissive |
+| v15 | starting fresh | — | Reverted to linear decay (0.005→0.003); tightened log_std clamp to [-2, -0.2] (max entropy 4.88); stage 1 threshold 0.45 |

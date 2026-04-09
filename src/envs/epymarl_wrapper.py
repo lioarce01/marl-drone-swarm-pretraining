@@ -62,9 +62,9 @@ class EPyMARLWrapper:
             "episode_limit": self.episode_limit,
         }
 
-    def reset(self) -> None:
+    def reset(self, seed=None) -> None:
         """Reset the environment. Observations are stored internally."""
-        obs_dict, _ = self._env.reset()
+        obs_dict, _ = self._env.reset(seed=seed)
         self._last_obs = [obs_dict[a] for a in self._env.agents]
         self._episode_return = 0.0
         self._step = 0
