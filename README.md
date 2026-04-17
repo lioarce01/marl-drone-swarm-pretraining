@@ -1,6 +1,5 @@
-# swarm-ml-pretrain
-
-Pretraining a multi-agent reinforcement learning (MARL) model for cooperative quadcopter swarm control in simulation. The goal is a transferable actor policy that can be deployed on real drones.
+# swarm-ml-rl
+Multi-agent reinforcement learning (MARL) model for cooperative quadcopter swarm control in simulation. The goal is a transferable actor policy that can be deployed on real drones.
 
 ## Task
 
